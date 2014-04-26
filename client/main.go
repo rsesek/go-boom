@@ -39,5 +39,6 @@ func main() {
 		panic("omg")
 	}
 
-	for {}
+	for {
+	}
 }

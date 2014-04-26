@@ -19,18 +19,15 @@ package crashhost
 
 import (
 	"bytes"
-	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"syscall"
 )
 
-const kCrasherFlag = "-run-under-crash-reporter-host"
-
-// Define a flag so that it can be passed to the child, but it is not checked.
-var _ = flag.Bool(kCrasherFlag[1:], false, "The process is running under a crash reporting host.")
+const kGoCrashHost = "GO_CRASH_REPORTER_HOST"
 
 type biwriter struct {
 	crashbuf bytes.Buffer
@@ -39,7 +36,7 @@ type biwriter struct {
 
 func newBiwriter(w io.Writer) *biwriter {
 	return &biwriter{
-		realw:    w,
+		realw: w,
 	}
 }
 
@@ -50,16 +47,15 @@ func (w *biwriter) Write(p []byte) (int, error) {
 
 func EnableCrashReporting() {
 	// Already running under crash reporter.
-	for _, arg := range os.Args {
-		if arg == kCrasherFlag {
-			return
-		}
+	if crashHostPid, _ := strconv.Atoi(os.Getenv(kGoCrashHost)); crashHostPid == os.Getppid() {
+		return
 	}
 
-	// Not running under crash reporter, so re-exec.
-	args := append(os.Args, kCrasherFlag)
+	cmd := exec.Command(os.Args[0], os.Args[1:]...)
 
-	cmd := exec.Command(args[0], args[1:]...)
+	// Not running under crash reporter, so re-exec, specifying this as the crash host pid.
+	cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%d", kGoCrashHost, os.Getpid()))
+
 	// Make sure that standard fds are given back to the controlling tty,
 	// but also caputre stdout/err for uploading with the crash report.
 	cmd.Stdin = os.Stdin
