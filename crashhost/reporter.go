@@ -21,6 +21,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"mime/multipart"
+	"net/textproto"
 	"os"
 	"os/exec"
 	"strconv"
@@ -58,24 +60,58 @@ func EnableCrashReporting() {
 
 	// Make sure that standard fds are given back to the controlling tty,
 	// but also caputre stdout/err for uploading with the crash report.
+	stdout := newBiwriter(os.Stdout)
+	stderr := newBiwriter(os.Stderr)
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = newBiwriter(os.Stdout)
-	cmd.Stderr = newBiwriter(os.Stderr)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	cmd.Run()
-
-	if !cmd.ProcessState.Success() {
-		waitpid := cmd.ProcessState.Sys().(syscall.WaitStatus)
-		fmt.Println("Process crashed with exit code", waitpid.ExitStatus())
-
-		if waitpid.Signaled() {
-			fmt.Println("... exited with signal", waitpid.Signal())
-		}
-
-		// TODO(rsesek): HTTP POST the report + log output.
-
-		os.Exit(waitpid.ExitStatus())
+	if cmd.ProcessState.Success() {
+		// The actual process has finished, so exit cleanly.
+		os.Exit(0)
 	}
 
-	// The actual process has finished, so exit cleanly.
-	os.Exit(0)
+	// The process did not exit cleanly, so start building a crash report.
+
+	waitpid := cmd.ProcessState.Sys().(syscall.WaitStatus)
+	fmt.Println("Process crashed with exit code", waitpid.ExitStatus())
+
+	if waitpid.Signaled() {
+		fmt.Println("... exited with signal", waitpid.Signal())
+	}
+
+	// TODO(rsesek): HTTP POST the report.
+	f, err := os.Create("report.txt")
+	if err == nil {
+		buildMultipart(f, stdout.crashbuf, stderr.crashbuf)
+		f.Close()
+	}
+
+	os.Exit(waitpid.ExitStatus())
+}
+
+func buildMultipart(dest io.Writer, stdout, stderr bytes.Buffer) error {
+	mp := multipart.NewWriter(dest)
+
+	for i, s := range []bytes.Buffer{stdout, stderr} {
+		var filename string
+		if i == 0 {
+			filename = "stdout"
+		} else {
+			filename = "stderr"
+		}
+
+		headers := make(textproto.MIMEHeader)
+		headers.Set("Content-Disposition", "attachment; filename="+filename)
+		headers.Set("Content-Type", "text/plain")
+		part, err := mp.CreatePart(headers)
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(part, &s); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
