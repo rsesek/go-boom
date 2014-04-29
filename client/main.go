@@ -31,7 +31,7 @@ func main() {
 
 	fmt.Println("client main()")
 
-	crashhost.EnableCrashReporting()
+	crashhost.EnableCrashReporting("http://127.0.0.1:8080/upload")
 
 	fmt.Println("crash reporting enabled")
 

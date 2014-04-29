@@ -18,8 +18,10 @@
 package crashhost
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -29,7 +31,7 @@ import (
 
 const kGoCrashHost = "GO_CRASH_REPORTER_HOST"
 
-func EnableCrashReporting() {
+func EnableCrashReporting(uploadUrl string) {
 	// Already running under crash reporter.
 	if crashHostPid, _ := strconv.Atoi(os.Getenv(kGoCrashHost)); crashHostPid == os.Getppid() {
 		return
@@ -69,12 +71,32 @@ func EnableCrashReporting() {
 		pr.Signal = int(waitpid.Signal())
 	}
 
-	// TODO(rsesek): HTTP POST the report.
-	f, err := os.Create("report.txt")
-	if err == nil {
-		pr.WriteTo(f)
-		f.Close()
+	var buf bytes.Buffer
+	if err := pr.WriteTo(&buf); err != nil {
+		fmt.Fprintln(os.Stderr, "Failed to write crash report:", err)
+		os.Exit(waitpid.ExitStatus())
+		return
+	}
+
+	if err := uploadReport(uploadUrl, &buf); err != nil {
+		fmt.Fprintln(os.Stderr, "Failed to upload crash report:", err)
+		os.Exit(waitpid.ExitStatus())
+		return
 	}
 
 	os.Exit(waitpid.ExitStatus())
+}
+
+func uploadReport(uploadUrl string, body io.Reader) error {
+	req, err := http.NewRequest("POST", uploadUrl, body)
+	if err != nil {
+		return err
+	}
+
+	if req.URL.Scheme != "https" {
+		fmt.Fprintln(os.Stderr, "\n\n*** WARNING: Submitting privacy-sensitive crash report over clear-text HTTP, not secure HTTPS! ***\n\n")
+	}
+
+	_, err = http.DefaultClient.Do(req)
+	return err
 }
