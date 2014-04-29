@@ -21,7 +21,7 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/rsesek/go-crash-reporting/crashhost"
+	"github.com/rsesek/go-boom/crashhost"
 )
 
 var doPanic = flag.Bool("panic", false, "Panic after launch")
