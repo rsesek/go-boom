@@ -18,33 +18,28 @@
 package crashhost
 
 import (
-	"bytes"
 	"fmt"
 	"io"
-	"mime/multipart"
-	"net/textproto"
 	"os"
 	"os/exec"
 	"strconv"
 	"syscall"
+	"time"
 )
 
 const kGoCrashHost = "GO_CRASH_REPORTER_HOST"
 
 type biwriter struct {
-	crashbuf bytes.Buffer
-	realw    io.Writer
-}
-
-func newBiwriter(w io.Writer) *biwriter {
-	return &biwriter{
-		realw: w,
-	}
+	one io.Writer
+	two io.Writer
 }
 
 func (w *biwriter) Write(p []byte) (int, error) {
-	w.crashbuf.Write(p)
-	return w.realw.Write(p)
+	n, err := w.one.Write(p)
+	if err != nil {
+		return n, err
+	}
+	return w.two.Write(p)
 }
 
 func EnableCrashReporting() {
@@ -58,13 +53,15 @@ func EnableCrashReporting() {
 	// Not running under crash reporter, so re-exec, specifying this as the crash host pid.
 	cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%d", kGoCrashHost, os.Getpid()))
 
+	var pr ProcessRecord
+	pr.CommandLine = os.Args
+	start := time.Now()
+
 	// Make sure that standard fds are given back to the controlling tty,
 	// but also caputre stdout/err for uploading with the crash report.
-	stdout := newBiwriter(os.Stdout)
-	stderr := newBiwriter(os.Stderr)
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
+	cmd.Stdout = &biwriter{&pr.Stdout, os.Stdout}
+	cmd.Stderr = &biwriter{&pr.Stderr, os.Stderr}
 	cmd.Run()
 	if cmd.ProcessState.Success() {
 		// The actual process has finished, so exit cleanly.
@@ -72,43 +69,25 @@ func EnableCrashReporting() {
 	}
 
 	// The process did not exit cleanly, so start building a crash report.
+	pr.Timestamp = time.Now()
+	pr.Uptime = pr.Timestamp.Sub(start)
+	pr.Pid = cmd.ProcessState.Pid()
 
+	// TODO(rsesek): Is this OK on Windows?
 	waitpid := cmd.ProcessState.Sys().(syscall.WaitStatus)
-	fmt.Println("Process crashed with exit code", waitpid.ExitStatus())
-
-	if waitpid.Signaled() {
-		fmt.Println("... exited with signal", waitpid.Signal())
+	pr.StatusString = cmd.ProcessState.String()
+	pr.ExitCode = waitpid.ExitStatus()
+	pr.Signaled = waitpid.Signaled()
+	if pr.Signaled {
+		pr.Signal = int(waitpid.Signal())
 	}
 
 	// TODO(rsesek): HTTP POST the report.
 	f, err := os.Create("report.txt")
 	if err == nil {
-		buildMultipart(f, &stdout.crashbuf, &stderr.crashbuf)
+		pr.WriteTo(f)
 		f.Close()
 	}
 
 	os.Exit(waitpid.ExitStatus())
-}
-
-func buildMultipart(dest io.Writer, stdout, stderr io.Reader) error {
-	mp := multipart.NewWriter(dest)
-
-	files := map[string]io.Reader {
-		"stdout": stdout,
-		"stderr": stderr,
-	}
-	for filename, buf := range files {
-		headers := make(textproto.MIMEHeader)
-		headers.Set("Content-Disposition", "attachment; filename="+filename)
-		headers.Set("Content-Type", "text/plain")
-		part, err := mp.CreatePart(headers)
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(part, buf); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
