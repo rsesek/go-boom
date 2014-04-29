@@ -29,19 +29,6 @@ import (
 
 const kGoCrashHost = "GO_CRASH_REPORTER_HOST"
 
-type biwriter struct {
-	one io.Writer
-	two io.Writer
-}
-
-func (w *biwriter) Write(p []byte) (int, error) {
-	n, err := w.one.Write(p)
-	if err != nil {
-		return n, err
-	}
-	return w.two.Write(p)
-}
-
 func EnableCrashReporting() {
 	// Already running under crash reporter.
 	if crashHostPid, _ := strconv.Atoi(os.Getenv(kGoCrashHost)); crashHostPid == os.Getppid() {
@@ -60,8 +47,8 @@ func EnableCrashReporting() {
 	// Make sure that standard fds are given back to the controlling tty,
 	// but also caputre stdout/err for uploading with the crash report.
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = &biwriter{&pr.Stdout, os.Stdout}
-	cmd.Stderr = &biwriter{&pr.Stderr, os.Stderr}
+	cmd.Stdout = io.MultiWriter(&pr.Stdout, os.Stdout)
+	cmd.Stderr = io.MultiWriter(&pr.Stderr, os.Stderr)
 	cmd.Run()
 	if cmd.ProcessState.Success() {
 		// The actual process has finished, so exit cleanly.
