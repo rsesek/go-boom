@@ -83,24 +83,21 @@ func EnableCrashReporting() {
 	// TODO(rsesek): HTTP POST the report.
 	f, err := os.Create("report.txt")
 	if err == nil {
-		buildMultipart(f, stdout.crashbuf, stderr.crashbuf)
+		buildMultipart(f, &stdout.crashbuf, &stderr.crashbuf)
 		f.Close()
 	}
 
 	os.Exit(waitpid.ExitStatus())
 }
 
-func buildMultipart(dest io.Writer, stdout, stderr bytes.Buffer) error {
+func buildMultipart(dest io.Writer, stdout, stderr io.Reader) error {
 	mp := multipart.NewWriter(dest)
 
-	for i, s := range []bytes.Buffer{stdout, stderr} {
-		var filename string
-		if i == 0 {
-			filename = "stdout"
-		} else {
-			filename = "stderr"
-		}
-
+	files := map[string]io.Reader {
+		"stdout": stdout,
+		"stderr": stderr,
+	}
+	for filename, buf := range files {
 		headers := make(textproto.MIMEHeader)
 		headers.Set("Content-Disposition", "attachment; filename="+filename)
 		headers.Set("Content-Type", "text/plain")
@@ -108,7 +105,7 @@ func buildMultipart(dest io.Writer, stdout, stderr bytes.Buffer) error {
 		if err != nil {
 			return err
 		}
-		if _, err := io.Copy(part, &s); err != nil {
+		if _, err := io.Copy(part, buf); err != nil {
 			return err
 		}
 	}
